@@ -115,9 +115,14 @@ num_days = len(C_obs)
 
 # Will also want public health input on this
 #
-# CDC: 1 in 20 unvaccinated people in the US who get measles will be hospitalized
+# Note:
+# CDC: 1 in 5 unvaccinated people in the US who get measles will be hospitalized
 #   https://www.cdc.gov/measles/signs-symptoms/index.html
 #   As Remy pointed out, do we have a paper cite for this?
+#   As Remy pointed out, this seems way too high -- leads to "overreporting" effect
+#
+# Can also use Israel's data that estimates an overall CHR of 0.066
+# https://pubmed.ncbi.nlm.nih.gov/37002179/
 #
 # Confirmed with Remy:
 #   Overall IHR = unvax-IHR * proportion-symptomatic-infected-who-are-unvax
@@ -131,22 +136,27 @@ num_days = len(C_obs)
 #   is the same regardless of vaccination status!)
 # proportion-cases-who-are-unvax is taken from the linelist data
 
-prop_cases_unvax = 1 - (len(df[df["IsVaccinated"] == "Vaccinated: 2+ doses"]) +
-    len(df[df["IsVaccinated"] == "Vaccinated: 1 dose"])) / len(df)
-# 0.0423
-
-IHR = 0.05 * 0.9577
-# This comes out to be 0.048
+IHR_estimate = 0.066
 
 # TOTAL GUESS for these two parameters: need to ask public health officials for this!
 # Struggled to find literature on this -- LP
 time_between_symptoms_and_hosp = 5
+
+# This paper says LOS is 4-6 days in the US? Fig 3
+# https://pmc.ncbi.nlm.nih.gov/articles/PMC7188204/
+# This paper says LOS in Nigeria was between 4-32 days with a mean of 8.7 days
+# https://journals.lww.com/shmj/abstract/2009/12010/prolonged_hospital_stay_in_measles_patients.5.aspx
 time_in_hosp_before_death = 7
 
 # For time_between_symptoms_and_hosp, could use 3-5?
 # The source below says measles rash begins 3-5 days after
 #   symptom onset (after other generally milder symptoms)
 # https://www.cdc.gov/measles/signs-symptoms/index.html
+
+# Inpatient mortality: 3.3% in a study, overall mortality: 1/1000
+# https://pmc.ncbi.nlm.nih.gov/articles/PMC7188204/
+# CDC says overall mortality is 1/1000 to 3/1000
+# https://www.cdc.gov/measles/hcp/clinical-overview/index.html
 
 ######################################################################
 ############################# PYMC MODEL #############################
@@ -194,7 +204,7 @@ if __name__ == "__main__":
         #   the parameter n -- so, this leads to issues -- but using the Poisson
         #   distribution does not have this constraint -- LP
 
-        H = pm.Poisson("H", mu = I_shifted_for_H * IHR, observed=H_obs)
+        H = pm.Poisson("H", mu = I_shifted_for_H * IHR_estimate, observed=H_obs)
 
         D = pm.Poisson("D", mu = I_symp * case_fatal_rate, observed=D_obs)
 
@@ -215,8 +225,8 @@ if __name__ == "__main__":
     I_hdi = az.hdi(posterior_I, hdi_prob=0.95)
 
     days = np.arange(len(I_mean))
-    plt.fill_between(days, I_hdi["I_symp"].sel(hdi="lower"), I_hdi["I_symp"].sel(hdi="higher"), alpha=0.3, label="95% HDI")
-    plt.plot(days, I_mean, label="Estimated symptomatic infections (incidence), posterior mean")
+    plt.fill_between(days, I_hdi["I_symp"].sel(hdi="lower"), I_hdi["I_symp"].sel(hdi="higher"), alpha=0.3, label="95% Confidence")
+    plt.plot(days, I_mean, label="Estimated incidence, posterior mean")
     plt.plot(days, C_obs, label="Reported cases")
     plt.xlabel("Day")
     plt.ylabel("Cases")
@@ -233,3 +243,18 @@ if __name__ == "__main__":
     I_df["Linelist reported case counts"] = np.asarray(C_obs, dtype="int")
 
     I_df.to_csv("estimated_symptomatic_infections_95percent.csv")
+
+    breakpoint()
+
+    posterior_reporting_rate = trace.posterior["reporting_rate"]
+
+    reporting_rate_mean = posterior_reporting_rate.mean(dim=["chain", "draw"])
+    reporting_rate_hdi = az.hdi(posterior_reporting_rate, hdi_prob=0.95)
+
+    mean_val = reporting_rate_mean.values
+    lower_val = reporting_rate_hdi["reporting_rate"].sel(hdi="lower").values
+    upper_val = reporting_rate_hdi["reporting_rate"].sel(hdi="higher").values
+
+    reporting_rate_df = pd.DataFrame([{"Estimated reporting rate": mean_val, "Lower bound (95% credible)": lower_val, "Upper bound (95% credible)": upper_val}])
+
+    reporting_rate_df.to_csv("estimated_reporting_rate_95percent.csv")
